@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AirStation Dashboard</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+  <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body class="bg-dark text-light">
+  <div class="container py-3">
+    <h3 class="text-center mb-4"> 
+        AirStation Dashboard
+    </h3>
+    <div id="latest" class="row g-3 text-center"></div>
+    <hr class="my-4">
+    <div id="charts" class="mt-3"></div>
+  </div>
+
+<script>
+let chartData = [];
+let chartLayout = {
+  title: 'Environmental Trends (Last 24h)',
+  paper_bgcolor: 'transparent',
+  plot_bgcolor: 'transparent',
+  font: { color: 'white' },
+  margin: { t: 50, l: 50, r: 20, b: 40 },
+  legend: { orientation: 'h', x: 0, y: -0.3 }
+};
+
+// Default visible traces
+let visibleTraces = { temperature: true, humidity: true, co2: true, eco2: false };
+
+async function fetchLatest() {
+  const res = await fetch('/api/latest');
+  const d = await res.json();
+  if (!d.timestamp) return;
+
+  const cards = [
+    { key: 'temperature', name: 'Temperature', val: `${d.temperature_C} °C`, color: '#ff7f0e' },
+    { key: 'humidity', name: 'Humidity', val: `${d.humidity_pct}%`, color: '#1f77b4' },
+    { key: 'co2', name: 'CO₂ (MH-Z19)', val: `${d.co2_ppm} ppm`, color: '#2ca02c' },
+    { key: 'eco2', name: 'eCO₂ (ENS160)', val: `${d.eCO2_ppm} ppm`, color: '#17becf' },
+    { key: 'pressure', name: 'Pressure', val: `${d.pressure_hPa} hPa`, color: '#9467bd' },
+    { key: 'tvoc', name: 'TVOC', val: `${d.TVOC_ppb} ppb`, color: '#8c564b' },
+    { key: 'aqi', name: 'AQI', val: d.AQI, color: '#e377c2' },
+  ];
+
+  document.getElementById('latest').innerHTML = cards.map(c =>
+    `<div class="col-6 col-md-2">
+      <div class="card bg-secondary border-0 shadow-sm sensor-card ${visibleTraces[c.key] ? 'bg-success' : ''}"
+           data-key="${c.key}" style="cursor:pointer;">
+        <div class="card-body p-2">
+          <h6>${c.name}</h6>
+          <h5 class="fw-bold" style="color:${c.color};">${c.val}</h5>
+        </div>
+      </div>
+    </div>`).join('');
+
+  // Toggle trace visibility on click
+  document.querySelectorAll('.sensor-card').forEach(el => {
+    el.onclick = () => {
+      const key = el.dataset.key;
+      visibleTraces[key] = !visibleTraces[key];
+      el.classList.toggle('bg-success');
+      plotTrends(); // re-render chart
+    };
+  });
+}
+
+async function plotTrends() {
+  const res = await fetch('/api/data');
+  const data = await res.json();
+  if (!data.length) return;
+  const ts = data.map(x => x.timestamp);
+
+  chartData = [
+    { key: 'temperature', name: 'Temperature (°C)', y: data.map(x => x.temperature_C), color: '#ff7f0e' },
+    { key: 'humidity', name: 'Humidity (%)', y: data.map(x => x.humidity_pct), color: '#1f77b4' },
+    { key: 'co2', name: 'CO₂ (MH-Z19)', y: data.map(x => x.co2_ppm), color: '#2ca02c' },
+    { key: 'eco2', name: 'eCO₂ (ENS160)', y: data.map(x => x.eCO2_ppm), color: '#17becf' },
+    { key: 'pressure', name: 'Pressure (hPa)', y: data.map(x => x.pressure_hPa), color: '#9467bd' },
+    { key: 'tvoc', name: 'TVOC (ppb)', y: data.map(x => x.TVOC_ppb), color: '#8c564b' },
+    { key: 'aqi', name: 'AQI', y: data.map(x => x.AQI), color: '#e377c2' },
+  ];
+
+  const traces = chartData.filter(t => visibleTraces[t.key]).map(t => ({
+    x: ts,
+    y: t.y,
+    name: t.name,
+    line: { color: t.color, width: 2 },
+    mode: 'lines+markers'
+  }));
+
+  // Assign yaxis for scaling separation
+  traces.forEach(t => {
+    if (t.name.includes('CO₂') || t.name.includes('eCO₂')) t.yaxis = 'y2';
+  });
+
+  // layout update
+  let multiLayout = {
+    ...chartLayout,
+    yaxis: { showticklabels: false, title: '', zeroline: false },
+    yaxis2: {
+      overlaying: 'y',
+      side: 'right',
+      showticklabels: false,
+      title: '',
+      zeroline: false
+    }
+  };
+
+  Plotly.newPlot('charts', traces, multiLayout, { responsive: true });
+
+}
+
+async function refreshAll() {
+  await fetchLatest();
+  await plotTrends();
+}
+
+refreshAll();
+setInterval(refreshAll, 30000);
+</script>
+
+</body>
+</html>
+
