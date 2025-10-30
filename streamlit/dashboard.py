@@ -1,18 +1,11 @@
 # ---------------------------------------------------------------
-# dashboard.py — Streamlit Dashboard for Air Quality Visualization
-# Features:
-# - Auto-refresh every 30 s
-# - Dynamic time-range selection
-# - Dynamic metric selection (AQI, eCO₂, etc.)
-# - Independent hover tooltips
-# - Mobile-friendly layout
-# - Latest readings with blink + timestamp
+# dashboard.py — Streamlit Air Quality Dashboard (Final, Fixed)
 # ---------------------------------------------------------------
 
 import streamlit as st
 import pandas as pd
 import numpy as np
-import plotly.express as px
+import plotly.graph_objects as go
 from datetime import datetime, timedelta
 from streamlit_autorefresh import st_autorefresh
 
@@ -34,14 +27,8 @@ st.caption("Interactive visualization of temperature, humidity, CO₂, AQI and m
 st_autorefresh(interval=30 * 1000, key="data_refresh")
 
 # ---------------------------------------------------------------
-# LOAD DATA
+# LOAD DATA  (Replace with your live source)
 # ---------------------------------------------------------------
-# TODO: Replace this demo section with your actual API or CSV source.
-# For example:
-# response = requests.get("https://api.example.com/airdata")
-# df = pd.DataFrame(response.json())
-
-# --- Demo synthetic data (for local testing) ---
 date_rng = pd.date_range(end=datetime.now(), periods=500, freq="5min")
 df = pd.DataFrame({
     "timestamp": date_rng,
@@ -51,8 +38,6 @@ df = pd.DataFrame({
     "AQI": 50 + 10 * np.sin(np.linspace(0, 6, len(date_rng))),
     "eco2_ppm": 410 + 15 * np.cos(np.linspace(0, 5, len(date_rng)))
 })
-# ---------------------------------------------------------------
-
 df["timestamp"] = pd.to_datetime(df["timestamp"])
 df = df.sort_values("timestamp")
 
@@ -65,7 +50,7 @@ st.sidebar.header("🔧 Controls")
 time_range = st.sidebar.selectbox(
     "Show data for:",
     ("Last 1 Hour", "Last 12 Hours", "Last 24 Hours", "Yesterday", "Entire Period"),
-    index=1  # Default = Last 12 Hours
+    index=1,
 )
 
 now = df["timestamp"].max()
@@ -97,44 +82,45 @@ metrics = st.sidebar.multiselect(
 )
 
 # ---------------------------------------------------------------
-# NORMALIZATION (for visual scale only)
+# NORMALIZE for visual comparison (but keep actual hover values)
 # ---------------------------------------------------------------
 df_norm = df.copy()
 for col in metrics:
-    col_norm = f"{col}_norm"
-    df_norm[col_norm] = (df[col] - df[col].min()) / (df[col].max() - df[col].min())
+    df_norm[f"{col}_norm"] = (df[col] - df[col].min()) / (df[col].max() - df[col].min())
 
 # ---------------------------------------------------------------
-# CHART
+# PLOT (using Plotly Graph Objects for full hover control)
 # ---------------------------------------------------------------
-plot_cols = [f"{col}_norm" for col in metrics]
+fig = go.Figure()
 
-fig = px.line(
-    df_norm,
-    x="timestamp",
-    y=plot_cols,
-    labels={"value": "Normalized Value", "timestamp": "Time"},
-    title="📊 Air-Quality Trends",
-)
-
-# Custom trace names
-for trace, col in zip(fig.data, metrics):
-    trace.name = col.capitalize()
-    trace.hovertemplate = f"%{{x|%Y-%m-%d %H:%M}}<br>{col}: %{{customdata[0]:.2f}}<extra></extra>"
-
-# Add custom data for real (un-normalized) values
-fig.update_traces(customdata=[df[metrics].to_numpy()[:, i:i+1] for i in range(len(metrics))])
+for col in metrics:
+    fig.add_trace(
+        go.Scatter(
+            x=df["timestamp"],
+            y=df_norm[f"{col}_norm"],
+            mode="lines",
+            name=col.capitalize(),
+            line=dict(width=3),
+            hovertemplate=(
+                f"<b>{col.capitalize()}</b><br>"
+                "Time: %{x|%Y-%m-%d %H:%M:%S}<br>"
+                f"Value: %{customdata:.2f}<extra></extra>"
+            ),
+            customdata=df[col],  # actual (un-normalized) values
+        )
+    )
 
 fig.update_layout(
-    autosize=True,
-    hovermode="closest",   # 👈 independent tooltips per parameter
+    title="📊 Air Quality Trends",
+    xaxis_title="Time",
+    yaxis_title="Normalized Scale (0–1)",
+    hovermode="closest",  # independent hover tooltips
     margin=dict(l=10, r=10, t=50, b=20),
     legend_title_text="Parameters",
     template="plotly_white",
+    autosize=True,
 )
-fig.update_traces(line=dict(width=3))
 
-# Display chart
 st.plotly_chart(
     fig,
     use_container_width=True,
@@ -146,7 +132,6 @@ st.plotly_chart(
 # ---------------------------------------------------------------
 latest = df.iloc[-1]
 
-# CSS for blink effect
 st.markdown("""
     <style>
     .blink {
@@ -164,11 +149,8 @@ st.markdown("""
 st.markdown("### 🌡️ Latest Sensor Readings (auto-updated every 30 s)")
 cols = st.columns(len(metrics))
 for i, col in enumerate(metrics):
-    value = f"{latest[col]:.2f}"
-    cols[i].markdown(
-        f"<div class='blink'>{col.capitalize()}: {value}</div>",
-        unsafe_allow_html=True,
-    )
+    cols[i].markdown(f"<div class='blink'>{col.capitalize()}: {latest[col]:.2f}</div>",
+                     unsafe_allow_html=True)
 
 last_update = latest["timestamp"].strftime("%Y-%m-%d %H:%M:%S")
 st.markdown(
