@@ -1,18 +1,18 @@
 # ---------------------------------------------------------------
 # dashboard.py — Streamlit Dashboard for Air Quality Visualization
 # Features:
-# - Auto-refresh every 30s
-# - Selectable time range
-# - Actual values on hover
-# - Default metrics: Temp, Humidity, CO₂ Primary
+# - Auto-refresh every 30 s
+# - Dynamic time-range selection
+# - Dynamic metric selection (AQI, eCO₂, etc.)
+# - Independent hover tooltips
 # - Mobile-friendly layout
-# - Latest readings with visual blink + last updated time
+# - Latest readings with blink + timestamp
 # ---------------------------------------------------------------
 
 import streamlit as st
 import pandas as pd
-import plotly.express as px
 import numpy as np
+import plotly.express as px
 from datetime import datetime, timedelta
 from streamlit_autorefresh import st_autorefresh
 
@@ -22,11 +22,11 @@ from streamlit_autorefresh import st_autorefresh
 st.set_page_config(
     page_title="Air Quality Dashboard",
     layout="wide",
-    initial_sidebar_state="collapsed"
+    initial_sidebar_state="collapsed",
 )
 
 st.title("🌤️ Air Quality Monitoring Dashboard")
-st.caption("Interactive visualization of temperature, humidity, and CO₂ trends over time")
+st.caption("Interactive visualization of temperature, humidity, CO₂, AQI and more")
 
 # ---------------------------------------------------------------
 # AUTO-REFRESH (every 30 seconds)
@@ -36,18 +36,20 @@ st_autorefresh(interval=30 * 1000, key="data_refresh")
 # ---------------------------------------------------------------
 # LOAD DATA
 # ---------------------------------------------------------------
-# TODO: Replace this section with your actual API or CSV data loading logic.
-# Example:
+# TODO: Replace this demo section with your actual API or CSV source.
+# For example:
 # response = requests.get("https://api.example.com/airdata")
 # df = pd.DataFrame(response.json())
 
-# --- Demo Data (Remove when live data available) ---
+# --- Demo synthetic data (for local testing) ---
 date_rng = pd.date_range(end=datetime.now(), periods=500, freq="5min")
 df = pd.DataFrame({
     "timestamp": date_rng,
     "temperature": 25 + 3 * np.sin(np.linspace(0, 10, len(date_rng))),
     "humidity": 60 + 10 * np.cos(np.linspace(0, 8, len(date_rng))),
     "co2_primary": 400 + 20 * np.random.randn(len(date_rng)),
+    "AQI": 50 + 10 * np.sin(np.linspace(0, 6, len(date_rng))),
+    "eco2_ppm": 410 + 15 * np.cos(np.linspace(0, 5, len(date_rng)))
 })
 # ---------------------------------------------------------------
 
@@ -60,7 +62,6 @@ df = df.sort_values("timestamp")
 st.sidebar.header("🔧 Controls")
 
 # --- Time Range Selection ---
-st.sidebar.subheader("Time Range")
 time_range = st.sidebar.selectbox(
     "Show data for:",
     ("Last 1 Hour", "Last 12 Hours", "Last 24 Hours", "Yesterday", "Entire Period"),
@@ -82,15 +83,21 @@ else:
 
 df = df[(df["timestamp"] >= start_time) & (df["timestamp"] <= now)]
 
-# --- Metric Selection ---
+# --- Metric Selection (Dynamic) ---
+numeric_cols = [
+    col for col in df.columns
+    if pd.api.types.is_numeric_dtype(df[col]) and col.lower() != "timestamp"
+]
+
 metrics = st.sidebar.multiselect(
     "Select parameters to display:",
-    options=["temperature", "humidity", "co2_primary"],
-    default=["temperature", "humidity", "co2_primary"]
+    options=numeric_cols,
+    default=[m for m in ["temperature", "humidity", "co2_primary"] if m in numeric_cols][:3]
+        or numeric_cols[:3],
 )
 
 # ---------------------------------------------------------------
-# NORMALIZATION (for chart scale only)
+# NORMALIZATION (for visual scale only)
 # ---------------------------------------------------------------
 df_norm = df.copy()
 for col in metrics:
@@ -101,28 +108,41 @@ for col in metrics:
 # CHART
 # ---------------------------------------------------------------
 plot_cols = [f"{col}_norm" for col in metrics]
+
 fig = px.line(
     df_norm,
     x="timestamp",
     y=plot_cols,
     labels={"value": "Normalized Value", "timestamp": "Time"},
-    title="📊 Air Quality Trends",
-    hover_data={col: ':.2f' for col in metrics}
+    title="📊 Air-Quality Trends",
 )
+
+# Custom trace names
+for trace, col in zip(fig.data, metrics):
+    trace.name = col.capitalize()
+    trace.hovertemplate = f"%{{x|%Y-%m-%d %H:%M}}<br>{col}: %{{customdata[0]:.2f}}<extra></extra>"
+
+# Add custom data for real (un-normalized) values
+fig.update_traces(customdata=[df[metrics].to_numpy()[:, i:i+1] for i in range(len(metrics))])
 
 fig.update_layout(
     autosize=True,
-    hovermode="x unified",
+    hovermode="closest",   # 👈 independent tooltips per parameter
     margin=dict(l=10, r=10, t=50, b=20),
     legend_title_text="Parameters",
     template="plotly_white",
 )
 fig.update_traces(line=dict(width=3))
 
-st.plotly_chart(fig, use_container_width=True, responsive=True)
+# Display chart
+st.plotly_chart(
+    fig,
+    use_container_width=True,
+    config={"displayModeBar": True, "scrollZoom": True, "responsive": True},
+)
 
 # ---------------------------------------------------------------
-# LATEST READINGS (with blink + timestamp)
+# LATEST READINGS (Blink + Timestamp)
 # ---------------------------------------------------------------
 latest = df.iloc[-1]
 
@@ -141,19 +161,20 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# Display current readings
 st.markdown("### 🌡️ Latest Sensor Readings (auto-updated every 30 s)")
 cols = st.columns(len(metrics))
 for i, col in enumerate(metrics):
     value = f"{latest[col]:.2f}"
     cols[i].markdown(
         f"<div class='blink'>{col.capitalize()}: {value}</div>",
-        unsafe_allow_html=True
+        unsafe_allow_html=True,
     )
 
-# Show last updated time
 last_update = latest["timestamp"].strftime("%Y-%m-%d %H:%M:%S")
-st.markdown(f"<p style='text-align:right; font-size:0.9em; color:gray;'>⏱️ Last updated at: {last_update}</p>", unsafe_allow_html=True)
+st.markdown(
+    f"<p style='text-align:right; font-size:0.9em; color:gray;'>⏱️ Last updated at: {last_update}</p>",
+    unsafe_allow_html=True,
+)
 
 # ---------------------------------------------------------------
 # DATA TABLE (optional)
@@ -171,5 +192,5 @@ st.markdown(
     <small>Dashboard auto-refreshes every 30 seconds — built with ❤️ using <b>Streamlit</b> and <b>Plotly</b>.</small>
     </center>
     """,
-    unsafe_allow_html=True
+    unsafe_allow_html=True,
 )
