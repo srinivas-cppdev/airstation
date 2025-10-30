@@ -115,4 +115,61 @@ fig.update_layout(
     hovermode="x unified",
     margin=dict(l=10, r=10, t=50, b=20),
     legend_title_text="Parameters",
-    template="plotly_white_
+    template="plotly_white",
+)
+fig.update_traces(line=dict(width=3))
+
+st.plotly_chart(fig, use_container_width=True, responsive=True)
+
+# ---------------------------------------------------------------
+# LATEST READINGS (with blink + timestamp)
+# ---------------------------------------------------------------
+latest = df.iloc[-1]
+
+# CSS for blink effect
+st.markdown("""
+    <style>
+    .blink {
+        animation: blinker 1.2s ease-in-out 2;
+        color: #2E86AB;
+        font-weight: bold;
+        font-size: 1.1em;
+    }
+    @keyframes blinker {
+        50% { opacity: 0.4; }
+    }
+    </style>
+""", unsafe_allow_html=True)
+
+# Display current readings
+st.markdown("### 🌡️ Latest Sensor Readings (auto-updated every 30 s)")
+cols = st.columns(len(metrics))
+for i, col in enumerate(metrics):
+    value = f"{latest[col]:.2f}"
+    cols[i].markdown(
+        f"<div class='blink'>{col.capitalize()}: {value}</div>",
+        unsafe_allow_html=True
+    )
+
+# Show last updated time
+last_update = latest["timestamp"].strftime("%Y-%m-%d %H:%M:%S")
+st.markdown(f"<p style='text-align:right; font-size:0.9em; color:gray;'>⏱️ Last updated at: {last_update}</p>", unsafe_allow_html=True)
+
+# ---------------------------------------------------------------
+# DATA TABLE (optional)
+# ---------------------------------------------------------------
+with st.expander("📋 View Recent Data"):
+    st.dataframe(df.tail(50), use_container_width=True)
+
+# ---------------------------------------------------------------
+# FOOTER
+# ---------------------------------------------------------------
+st.markdown(
+    """
+    <hr>
+    <center>
+    <small>Dashboard auto-refreshes every 30 seconds — built with ❤️ using <b>Streamlit</b> and <b>Plotly</b>.</small>
+    </center>
+    """,
+    unsafe_allow_html=True
+)
