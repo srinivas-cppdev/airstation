@@ -1,181 +1,118 @@
+# ---------------------------------------------------------------
+# dashboard.py — Streamlit Dashboard for Air Quality Visualization
+# Features:
+# - Auto-refresh every 30s
+# - Selectable time range
+# - Actual values on hover
+# - Default metrics: Temp, Humidity, CO₂ Primary
+# - Mobile-friendly layout
+# - Latest readings with visual blink + last updated time
+# ---------------------------------------------------------------
+
 import streamlit as st
-import requests
 import pandas as pd
-import plotly.graph_objects as go
-from typing import List, Dict, Any, Tuple
+import plotly.express as px
+import numpy as np
+from datetime import datetime, timedelta
+from streamlit_autorefresh import st_autorefresh
 
-# ==============================
-# CONFIG
-# ==============================
-# Synchronized with FIREBASE_BASE_URL from log_uploader.py
-FIREBASE_URL = "https://iot-sensors-pi-78113-default-rtdb.europe-west1.firebasedatabase.app/" 
-# Synchronized with SENSOR_ID from log_uploader.py
-SENSOR_IDS = ["raspi_4b"]  
+# ---------------------------------------------------------------
+# PAGE CONFIGURATION
+# ---------------------------------------------------------------
+st.set_page_config(
+    page_title="Air Quality Dashboard",
+    layout="wide",
+    initial_sidebar_state="collapsed"
+)
 
-# Configuration for how to display each metric (Title and Unit)
-METRIC_CONFIGS: Dict[str, Tuple[str, str]] = {
-    "temperature_C": ("Temperature", "°C"),
-    "humidity_pct": ("Humidity", "%"),
-    "AQI": ("AQI", "Index"),
-    "TVOC_ppb": ("TVOC", "ppb"),
-    "eCO2_ppm": ("eCO₂ (ENS160)", "ppm"), # Renamed title to clarify
-    "co2_ppm": ("CO₂ (MH-Z19)", "ppm"),
-    "pressure_hPa": ("Pressure", "hPa"),
-    "altitude_m": ("Altitude", "m"),
-}
+st.title("🌤️ Air Quality Monitoring Dashboard")
+st.caption("Interactive visualization of temperature, humidity, and CO₂ trends over time")
 
-# Fields that should be included in the multiselect for plotting
-DEFAULT_FIELDS: List[str] = list(METRIC_CONFIGS.keys())
+# ---------------------------------------------------------------
+# AUTO-REFRESH (every 30 seconds)
+# ---------------------------------------------------------------
+st_autorefresh(interval=30 * 1000, key="data_refresh")
 
-st.set_page_config(page_title="Srini's Airstation", layout="wide")
-st.title("🌡️ Srini's Home Information")
+# ---------------------------------------------------------------
+# LOAD DATA
+# ---------------------------------------------------------------
+# TODO: Replace this section with your actual API or CSV data loading logic.
+# Example:
+# response = requests.get("https://api.example.com/airdata")
+# df = pd.DataFrame(response.json())
 
-# ==============================
-# FUNCTIONS
-# ==============================
-@st.cache_data(ttl=30)
-def fetch_data(sensor_id):
-    """Fetches and processes all sensor data for a given sensor ID."""
-    url = f"{FIREBASE_URL}/{sensor_id}.json"
-    
-    try:
-        res = requests.get(url, timeout=10)
-        if res.status_code != 200:
-            st.error(f"Failed to fetch data from Firebase (Status: {res.status_code})")
-            return pd.DataFrame()
-        
-        data = res.json() or {}
-        
-        records = []
-        # Flatten the batches back into a single list of records
-        for batch_key, batch_list in data.items():
-            if isinstance(batch_list, list):
-                records.extend(batch_list)
-            else:
-                records.append(batch_list)
+# --- Demo Data (Remove when live data available) ---
+date_rng = pd.date_range(end=datetime.now(), periods=500, freq="5min")
+df = pd.DataFrame({
+    "timestamp": date_rng,
+    "temperature": 25 + 3 * np.sin(np.linspace(0, 10, len(date_rng))),
+    "humidity": 60 + 10 * np.cos(np.linspace(0, 8, len(date_rng))),
+    "co2_primary": 400 + 20 * np.random.randn(len(date_rng)),
+})
+# ---------------------------------------------------------------
 
+df["timestamp"] = pd.to_datetime(df["timestamp"])
+df = df.sort_values("timestamp")
 
-        df = pd.DataFrame(records)
-        
-        if not df.empty:
-            # FIX: Use format='mixed' and errors='coerce' for robust timestamp parsing.
-            df["timestamp"] = pd.to_datetime(df["timestamp"], format='mixed', errors='coerce')
-            df.dropna(subset=['timestamp'], inplace=True)
-            
-            df = df.sort_values("timestamp")
-            
-            # --- FIXED: Now prioritizes co2_ppm (MH-Z19) over eCO2_ppm (ENS160) ---
-            df['CO2_Primary'] = df.get('co2_ppm', pd.Series(dtype=float)).combine_first(df['eCO2_ppm'])
-            
-        return df
+# ---------------------------------------------------------------
+# SIDEBAR CONTROLS
+# ---------------------------------------------------------------
+st.sidebar.header("🔧 Controls")
 
-    except requests.exceptions.RequestException as e:
-        st.error(f"Network Error: Could not connect to Firebase. {e}")
-        return pd.DataFrame()
+# --- Time Range Selection ---
+st.sidebar.subheader("Time Range")
+time_range = st.sidebar.selectbox(
+    "Show data for:",
+    ("Last 1 Hour", "Last 12 Hours", "Last 24 Hours", "Yesterday", "Entire Period"),
+    index=1  # Default = Last 12 Hours
+)
 
-def normalize(series: pd.Series) -> pd.Series:
-    """Simple normalization for visual comparability."""
-    series = pd.to_numeric(series, errors='coerce').dropna()
-    if series.empty or series.nunique() <= 1:
-        return series
-    # Normalize to 0-100 range
-    return (series - series.min()) / (series.max() - series.min()) * 100
+now = df["timestamp"].max()
+if time_range == "Last 1 Hour":
+    start_time = now - timedelta(hours=1)
+elif time_range == "Last 12 Hours":
+    start_time = now - timedelta(hours=12)
+elif time_range == "Last 24 Hours":
+    start_time = now - timedelta(hours=24)
+elif time_range == "Yesterday":
+    start_time = (now - timedelta(days=1)).replace(hour=0, minute=0, second=0)
+    now = start_time + timedelta(days=1)
+else:
+    start_time = df["timestamp"].min()
 
-# ==============================
-# DASHBOARD
-# ==============================
-for sensor in SENSOR_IDS:
-    st.markdown(f"## 📟 Source: `{sensor}`")
-    df = fetch_data(sensor)
-    
-    if df.empty:
-        st.warning("No data found yet or connection failed.")
-        st.markdown("---")
-        continue
+df = df[(df["timestamp"] >= start_time) & (df["timestamp"] <= now)]
 
-    # Latest values
-    latest: Dict[str, Any] = df.iloc[-1].to_dict()
-    
-    # ----------------------------------------------------
-    # DYNAMIC METRIC DISPLAY (NEW)
-    # ----------------------------------------------------
-    
-    # Identify all numeric, relevant metrics from the latest reading
-    display_metrics: List[Tuple[str, float]] = []
-    
-    for key, (title, unit) in METRIC_CONFIGS.items():
-        value = latest.get(key)
-        
-        # Check if value is not missing (NaN) and is numeric
-        if pd.notna(value) and isinstance(value, (int, float)):
-            # Special formatting for certain values
-            if key in ["eCO2_ppm", "co2_ppm", "AQI", "TVOC_ppb"]:
-                formatted_value = f"{value:.0f}"
-            else:
-                formatted_value = f"{value:.2f}"
+# --- Metric Selection ---
+metrics = st.sidebar.multiselect(
+    "Select parameters to display:",
+    options=["temperature", "humidity", "co2_primary"],
+    default=["temperature", "humidity", "co2_primary"]
+)
 
-            display_metrics.append((title, formatted_value, unit))
+# ---------------------------------------------------------------
+# NORMALIZATION (for chart scale only)
+# ---------------------------------------------------------------
+df_norm = df.copy()
+for col in metrics:
+    col_norm = f"{col}_norm"
+    df_norm[col_norm] = (df[col] - df[col].min()) / (df[col].max() - df[col].min())
 
-    if display_metrics:
-        # Create columns based on the number of available metrics (up to 6 columns)
-        num_metrics = len(display_metrics)
-        cols = st.columns(min(num_metrics, 6))
-        
-        for i, (title, value, unit) in enumerate(display_metrics):
-            if i < len(cols):
-                cols[i].metric(title, f"{value} {unit}")
-    else:
-        st.info("No current numeric sensor readings available for display.")
+# ---------------------------------------------------------------
+# CHART
+# ---------------------------------------------------------------
+plot_cols = [f"{col}_norm" for col in metrics]
+fig = px.line(
+    df_norm,
+    x="timestamp",
+    y=plot_cols,
+    labels={"value": "Normalized Value", "timestamp": "Time"},
+    title="📊 Air Quality Trends",
+    hover_data={col: ':.2f' for col in metrics}
+)
 
-    st.markdown("---")
-    
-    # ----------------------------------------------------
-    # PLOTTING LOGIC
-    # ----------------------------------------------------
-    
-    available_fields = [f for f in DEFAULT_FIELDS if f in df.columns]
-    
-    # Add the primary CO2 metric if it was created
-    if 'CO2_Primary' in df.columns and 'CO2_Primary' not in available_fields:
-        available_fields.insert(0, 'CO2_Primary')
-        
-    selected_fields = st.multiselect(
-        f"Select variables to display for {sensor}:",
-        options=available_fields,
-        default=[
-            "temperature_C", 
-            "humidity_pct", 
-            "eCO2_ppm"
-        ] if "eCO2_ppm" in available_fields else ["CO2_Primary"]
-    )
-
-    fig = go.Figure()
-    for field in selected_fields:
-        if pd.api.types.is_numeric_dtype(df[field]) and df[field].nunique() > 1:
-            y_values = normalize(df[field]) 
-            name_suffix = " (Normalized)"
-        else:
-            y_values = df[field]
-            name_suffix = ""
-
-        fig.add_trace(go.Scatter(
-            x=df["timestamp"],
-            y=y_values,
-            mode="lines",
-            name=field.replace('_', ' ').title() + name_suffix,
-            hovertemplate=f"{field.replace('_', ' ')}: %{{y:.2f}}<br>%{{x|%H:%M:%S}}<extra></extra>"
-        ))
-
-    fig.update_layout(
-        title=f"Combined Sensor Readings (Normalized for comparison)",
-        xaxis_title="Timestamp",
-        yaxis_title="Normalized Scale (0–100)",
-        hovermode="x unified",
-        legend_title="Variables",
-        height=400,
-        template="plotly_white"
-    )
-
-    st.plotly_chart(fig, use_container_width=True)
-    st.markdown("---")
-
+fig.update_layout(
+    autosize=True,
+    hovermode="x unified",
+    margin=dict(l=10, r=10, t=50, b=20),
+    legend_title_text="Parameters",
+    template="plotly_white_
