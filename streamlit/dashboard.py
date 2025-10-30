@@ -1,5 +1,13 @@
 # ---------------------------------------------------------------
-# dashboard.py — Streamlit Air Quality Dashboard (Final, Fixed)
+# Air Quality Dashboard – Streamlit
+# Features:
+# • Auto-refresh every 30 s
+# • Time-range selector
+# • Dynamic metric selector (AQI, eCO₂, etc.)
+# • Accurate hover values (real units)
+# • Independent hover tooltips
+# • Mobile-friendly layout
+# • Latest readings blink + timestamp
 # ---------------------------------------------------------------
 
 import streamlit as st
@@ -22,12 +30,12 @@ st.title("🌤️ Air Quality Monitoring Dashboard")
 st.caption("Interactive visualization of temperature, humidity, CO₂, AQI and more")
 
 # ---------------------------------------------------------------
-# AUTO-REFRESH (every 30 seconds)
+# AUTO-REFRESH (every 30 s)
 # ---------------------------------------------------------------
 st_autorefresh(interval=30 * 1000, key="data_refresh")
 
 # ---------------------------------------------------------------
-# LOAD DATA  (Replace with your live source)
+# LOAD DATA  (Replace this demo block with live source)
 # ---------------------------------------------------------------
 date_rng = pd.date_range(end=datetime.now(), periods=500, freq="5min")
 df = pd.DataFrame({
@@ -36,7 +44,7 @@ df = pd.DataFrame({
     "humidity": 60 + 10 * np.cos(np.linspace(0, 8, len(date_rng))),
     "co2_primary": 400 + 20 * np.random.randn(len(date_rng)),
     "AQI": 50 + 10 * np.sin(np.linspace(0, 6, len(date_rng))),
-    "eco2_ppm": 410 + 15 * np.cos(np.linspace(0, 5, len(date_rng)))
+    "eco2_ppm": 410 + 15 * np.cos(np.linspace(0, 5, len(date_rng))),
 })
 df["timestamp"] = pd.to_datetime(df["timestamp"])
 df = df.sort_values("timestamp")
@@ -82,31 +90,28 @@ metrics = st.sidebar.multiselect(
 )
 
 # ---------------------------------------------------------------
-# NORMALIZE for visual comparison (but keep actual hover values)
-# ---------------------------------------------------------------
-df_norm = df.copy()
-for col in metrics:
-    df_norm[f"{col}_norm"] = (df[col] - df[col].min()) / (df[col].max() - df[col].min())
-
-# ---------------------------------------------------------------
-# PLOT (using Plotly Graph Objects for full hover control)
+# PLOT (Graph Objects for full hover control)
 # ---------------------------------------------------------------
 fig = go.Figure()
 
 for col in metrics:
+    # normalize for visual comparison
+    y_norm = (df[col] - df[col].min()) / (df[col].max() - df[col].min())
+    custom_data = np.expand_dims(df[col].to_numpy(), axis=-1)
+
     fig.add_trace(
         go.Scatter(
             x=df["timestamp"],
-            y=df_norm[f"{col}_norm"],
+            y=y_norm,
             mode="lines",
             name=col.capitalize(),
             line=dict(width=3),
+            customdata=custom_data,
             hovertemplate=(
                 f"<b>{col.capitalize()}</b><br>"
                 "Time: %{x|%Y-%m-%d %H:%M:%S}<br>"
-                f"Value: %{customdata:.2f}<extra></extra>"
+                "Value: %{customdata[0]:.2f}<extra></extra>"
             ),
-            customdata=df[col],  # actual (un-normalized) values
         )
     )
 
@@ -114,7 +119,7 @@ fig.update_layout(
     title="📊 Air Quality Trends",
     xaxis_title="Time",
     yaxis_title="Normalized Scale (0–1)",
-    hovermode="closest",  # independent hover tooltips
+    hovermode="closest",      # independent tooltips
     margin=dict(l=10, r=10, t=50, b=20),
     legend_title_text="Parameters",
     template="plotly_white",
@@ -140,17 +145,17 @@ st.markdown("""
         font-weight: bold;
         font-size: 1.1em;
     }
-    @keyframes blinker {
-        50% { opacity: 0.4; }
-    }
+    @keyframes blinker { 50% { opacity: 0.4; } }
     </style>
 """, unsafe_allow_html=True)
 
 st.markdown("### 🌡️ Latest Sensor Readings (auto-updated every 30 s)")
 cols = st.columns(len(metrics))
 for i, col in enumerate(metrics):
-    cols[i].markdown(f"<div class='blink'>{col.capitalize()}: {latest[col]:.2f}</div>",
-                     unsafe_allow_html=True)
+    cols[i].markdown(
+        f"<div class='blink'>{col.capitalize()}: {latest[col]:.2f}</div>",
+        unsafe_allow_html=True,
+    )
 
 last_update = latest["timestamp"].strftime("%Y-%m-%d %H:%M:%S")
 st.markdown(
@@ -171,7 +176,9 @@ st.markdown(
     """
     <hr>
     <center>
-    <small>Dashboard auto-refreshes every 30 seconds — built with ❤️ using <b>Streamlit</b> and <b>Plotly</b>.</small>
+    <small>
+    Dashboard auto-refreshes every 30 seconds — built with ❤️ using <b>Streamlit</b> and <b>Plotly</b>.
+    </small>
     </center>
     """,
     unsafe_allow_html=True,
