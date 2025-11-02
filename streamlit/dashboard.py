@@ -10,7 +10,7 @@ LOG_DIR = os.path.expanduser("~/airstation/logs")
 REFRESH_INTERVAL = 30  # seconds
 
 # ---------- AUTO REFRESH ----------
-st_autorefresh = st.experimental_rerun  # not used
+st_autorefresh = 0# not used
 st_autorefresh = st.autorefresh(interval=REFRESH_INTERVAL * 1000, limit=None, key="air_refresh")
 
 # ---------- LOAD DATA ----------
