@@ -1,185 +1,125 @@
-# ---------------------------------------------------------------
-# Air Quality Dashboard – Streamlit
-# Features:
-# • Auto-refresh every 30 s
-# • Time-range selector
-# • Dynamic metric selector (AQI, eCO₂, etc.)
-# • Accurate hover values (real units)
-# • Independent hover tooltips
-# • Mobile-friendly layout
-# • Latest readings blink + timestamp
-# ---------------------------------------------------------------
-
-import streamlit as st
-import pandas as pd
-import numpy as np
-import plotly.graph_objects as go
+import os
 from datetime import datetime, timedelta
-from streamlit_autorefresh import st_autorefresh
+import pandas as pd
+import streamlit as st
+import plotly.graph_objects as go
 
-# ---------------------------------------------------------------
-# PAGE CONFIGURATION
-# ---------------------------------------------------------------
-st.set_page_config(
-    page_title="Air Quality Dashboard",
-    layout="wide",
-    initial_sidebar_state="collapsed",
+# ---------- CONFIG ----------
+st.set_page_config(page_title="AirStation Dashboard", layout="wide")
+LOG_DIR = os.path.expanduser("~/airstation/logs")
+REFRESH_INTERVAL = 30  # seconds
+
+# ---------- AUTO REFRESH ----------
+st_autorefresh = st.experimental_rerun  # type alias for clarity
+st_autorefresh = st.autorefresh(interval=REFRESH_INTERVAL * 1000, limit=None, key="autorefresh")
+
+# ---------- LOAD DATA ----------
+@st.cache_data(ttl=REFRESH_INTERVAL)
+def load_data() -> pd.DataFrame:
+    today = datetime.now().strftime("%Y-%m-%d")
+    yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+    paths = [os.path.join(LOG_DIR, f"{yesterday}.csv"),
+             os.path.join(LOG_DIR, f"{today}.csv")]
+
+    dfs = []
+    for p in paths:
+        if not os.path.exists(p):
+            continue
+        try:
+            df = pd.read_csv(p, on_bad_lines="skip")
+            if "timestamp" not in df.columns:
+                continue
+            df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
+            df = df.dropna(subset=["timestamp"])
+            dfs.append(df)
+        except Exception as e:
+            st.warning(f"⚠️ Could not read {p}: {e}")
+
+    if not dfs:
+        return pd.DataFrame()
+
+    df = pd.concat(dfs).sort_values("timestamp")
+    cutoff = datetime.now() - timedelta(hours=24)
+    df = df[df["timestamp"] >= cutoff].reset_index(drop=True)
+    return df
+
+
+df = load_data()
+
+st.title("🌫️ AirStation Dashboard")
+st.caption(f"Auto-refreshing every {REFRESH_INTERVAL}s — showing last 24 hours of data")
+
+if df.empty:
+    st.error("No recent CSV logs found in ~/airstation/logs/")
+    st.stop()
+
+# ---------- METRIC CARDS ----------
+latest = df.iloc[-1].to_dict()
+
+def metric_card(col, label, key, unit=""):
+    val = latest.get(key)
+    if val is None:
+        col.metric(label, "—")
+    else:
+        col.metric(label, f"{val:.1f} {unit}")
+
+c1, c2, c3, c4, c5, c6, c7 = st.columns(7)
+metric_card(c1, "Temperature (°C)", "temperature_C", "°C")
+metric_card(c2, "Humidity (%)", "humidity_pct", "%")
+metric_card(c3, "CO₂ (MH-Z19)", "co2_ppm", "ppm")
+metric_card(c4, "eCO₂ (ENS160)", "eCO2_ppm", "ppm")
+metric_card(c5, "Pressure (hPa)", "pressure_hPa", "hPa")
+metric_card(c6, "TVOC (ppb)", "TVOC_ppb", "ppb")
+metric_card(c7, "AQI", "AQI", "")
+
+st.divider()
+
+# ---------- TIME-SERIES CHART ----------
+param_map = {
+    "temperature_C": ("Temperature (°C)", "#ff7f0e"),
+    "humidity_pct": ("Humidity (%)", "#1f77b4"),
+    "co2_ppm": ("CO₂ (MH-Z19) (ppm)", "#2ca02c"),
+    "eCO2_ppm": ("eCO₂ (ENS160) (ppm)", "#17becf"),
+    "pressure_hPa": ("Pressure (hPa)", "#9467bd"),
+    "TVOC_ppb": ("TVOC (ppb)", "#8c564b"),
+    "AQI": ("AQI", "#e377c2"),
+}
+
+visible = st.multiselect(
+    "Select parameters to plot",
+    list(param_map.keys()),
+    default=["temperature_C", "humidity_pct", "co2_ppm"],
+    format_func=lambda k: param_map[k][0],
 )
 
-st.title("🌤️ Air Quality Monitoring Dashboard")
-st.caption("Interactive visualization of temperature, humidity, CO₂, AQI and more")
-
-# ---------------------------------------------------------------
-# AUTO-REFRESH (every 30 s)
-# ---------------------------------------------------------------
-st_autorefresh(interval=30 * 1000, key="data_refresh")
-
-# ---------------------------------------------------------------
-# LOAD DATA  (Replace this demo block with live source)
-# ---------------------------------------------------------------
-date_rng = pd.date_range(end=datetime.now(), periods=500, freq="5min")
-df = pd.DataFrame({
-    "timestamp": date_rng,
-    "temperature": 25 + 3 * np.sin(np.linspace(0, 10, len(date_rng))),
-    "humidity": 60 + 10 * np.cos(np.linspace(0, 8, len(date_rng))),
-    "co2_primary": 400 + 20 * np.random.randn(len(date_rng)),
-    "AQI": 50 + 10 * np.sin(np.linspace(0, 6, len(date_rng))),
-    "eco2_ppm": 410 + 15 * np.cos(np.linspace(0, 5, len(date_rng))),
-})
-df["timestamp"] = pd.to_datetime(df["timestamp"])
-df = df.sort_values("timestamp")
-
-# ---------------------------------------------------------------
-# SIDEBAR CONTROLS
-# ---------------------------------------------------------------
-st.sidebar.header("🔧 Controls")
-
-# --- Time Range Selection ---
-time_range = st.sidebar.selectbox(
-    "Show data for:",
-    ("Last 1 Hour", "Last 12 Hours", "Last 24 Hours", "Yesterday", "Entire Period"),
-    index=1,
-)
-
-now = df["timestamp"].max()
-if time_range == "Last 1 Hour":
-    start_time = now - timedelta(hours=1)
-elif time_range == "Last 12 Hours":
-    start_time = now - timedelta(hours=12)
-elif time_range == "Last 24 Hours":
-    start_time = now - timedelta(hours=24)
-elif time_range == "Yesterday":
-    start_time = (now - timedelta(days=1)).replace(hour=0, minute=0, second=0)
-    now = start_time + timedelta(days=1)
-else:
-    start_time = df["timestamp"].min()
-
-df = df[(df["timestamp"] >= start_time) & (df["timestamp"] <= now)]
-
-# --- Metric Selection (Dynamic) ---
-numeric_cols = [
-    col for col in df.columns
-    if pd.api.types.is_numeric_dtype(df[col]) and col.lower() != "timestamp"
-]
-
-metrics = st.sidebar.multiselect(
-    "Select parameters to display:",
-    options=numeric_cols,
-    default=[m for m in ["temperature", "humidity", "co2_primary"] if m in numeric_cols][:3]
-        or numeric_cols[:3],
-)
-
-# ---------------------------------------------------------------
-# PLOT (Graph Objects for full hover control)
-# ---------------------------------------------------------------
 fig = go.Figure()
-
-for col in metrics:
-    # normalize for visual comparison
-    y_norm = (df[col] - df[col].min()) / (df[col].max() - df[col].min())
-    custom_data = np.expand_dims(df[col].to_numpy(), axis=-1)
-
-    fig.add_trace(
-        go.Scatter(
-            x=df["timestamp"],
-            y=y_norm,
-            mode="lines",
-            name=col.capitalize(),
-            line=dict(width=3),
-            customdata=custom_data,
-            hovertemplate=(
-                f"<b>{col.capitalize()}</b><br>"
-                "Time: %{x|%Y-%m-%d %H:%M:%S}<br>"
-                "Value: %{customdata[0]:.2f}<extra></extra>"
-            ),
+for k in visible:
+    if k in df.columns:
+        fig.add_trace(
+            go.Scatter(
+                x=df["timestamp"],
+                y=df[k],
+                mode="lines",
+                name=param_map[k][0],
+                line=dict(color=param_map[k][1]),
+            )
         )
-    )
 
 fig.update_layout(
-    title="📊 Air Quality Trends",
+    title="Environmental Trends (Last 24 h)",
     xaxis_title="Time",
-    yaxis_title="Normalized Scale (0–1)",
-    hovermode="closest",      # independent tooltips
-    margin=dict(l=10, r=10, t=50, b=20),
-    legend_title_text="Parameters",
-    template="plotly_white",
-    autosize=True,
+    yaxis_title="Value",
+    template="plotly_dark",
+    height=500,
+    legend=dict(orientation="h", y=-0.2),
+    margin=dict(t=60, l=50, r=20, b=80),
 )
 
-st.plotly_chart(
-    fig,
-    use_container_width=True,
-    config={"displayModeBar": True, "scrollZoom": True, "responsive": True},
-)
+st.plotly_chart(fig, use_container_width=True)
 
-# ---------------------------------------------------------------
-# LATEST READINGS (Blink + Timestamp)
-# ---------------------------------------------------------------
-latest = df.iloc[-1]
+# ---------- DATA TABLE ----------
+st.subheader("Recent Data (last 100 rows)")
+st.dataframe(df.tail(100).sort_values("timestamp", ascending=False))
 
-st.markdown("""
-    <style>
-    .blink {
-        animation: blinker 1.2s ease-in-out 2;
-        color: #2E86AB;
-        font-weight: bold;
-        font-size: 1.1em;
-    }
-    @keyframes blinker { 50% { opacity: 0.4; } }
-    </style>
-""", unsafe_allow_html=True)
-
-st.markdown("### 🌡️ Latest Sensor Readings (auto-updated every 30 s)")
-cols = st.columns(len(metrics))
-for i, col in enumerate(metrics):
-    cols[i].markdown(
-        f"<div class='blink'>{col.capitalize()}: {latest[col]:.2f}</div>",
-        unsafe_allow_html=True,
-    )
-
-last_update = latest["timestamp"].strftime("%Y-%m-%d %H:%M:%S")
-st.markdown(
-    f"<p style='text-align:right; font-size:0.9em; color:gray;'>⏱️ Last updated at: {last_update}</p>",
-    unsafe_allow_html=True,
-)
-
-# ---------------------------------------------------------------
-# DATA TABLE (optional)
-# ---------------------------------------------------------------
-with st.expander("📋 View Recent Data"):
-    st.dataframe(df.tail(50), use_container_width=True)
-
-# ---------------------------------------------------------------
-# FOOTER
-# ---------------------------------------------------------------
-st.markdown(
-    """
-    <hr>
-    <center>
-    <small>
-    Dashboard auto-refreshes every 30 seconds — built with ❤️ using <b>Streamlit</b> and <b>Plotly</b>.
-    </small>
-    </center>
-    """,
-    unsafe_allow_html=True,
-)
+# ---------- FOOTER ----------
+st.caption("Data source: ~/airstation/logs/*.csv — refreshed every 30 s")
