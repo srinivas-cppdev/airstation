@@ -10,16 +10,18 @@ LOG_DIR = os.path.expanduser("~/airstation/logs")
 REFRESH_INTERVAL = 30  # seconds
 
 # ---------- AUTO REFRESH ----------
-st_autorefresh = st.experimental_rerun  # type alias for clarity
-st_autorefresh = st.autorefresh(interval=REFRESH_INTERVAL * 1000, limit=None, key="autorefresh")
+st_autorefresh = st.experimental_rerun  # not used
+st_autorefresh = st.autorefresh(interval=REFRESH_INTERVAL * 1000, limit=None, key="air_refresh")
 
 # ---------- LOAD DATA ----------
 @st.cache_data(ttl=REFRESH_INTERVAL)
 def load_data() -> pd.DataFrame:
     today = datetime.now().strftime("%Y-%m-%d")
     yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
-    paths = [os.path.join(LOG_DIR, f"{yesterday}.csv"),
-             os.path.join(LOG_DIR, f"{today}.csv")]
+    paths = [
+        os.path.join(LOG_DIR, f"{yesterday}.csv"),
+        os.path.join(LOG_DIR, f"{today}.csv"),
+    ]
 
     dfs = []
     for p in paths:
