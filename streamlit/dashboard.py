@@ -3,28 +3,24 @@ import requests
 import pandas as pd
 import plotly.graph_objects as go
 from typing import List, Dict, Any, Tuple
+from datetime import datetime, timedelta
 
 # ==============================
 # CONFIG
 # ==============================
-# Synchronized with FIREBASE_BASE_URL from log_uploader.py
-FIREBASE_URL = "https://iot-sensors-pi-78113-default-rtdb.europe-west1.firebasedatabase.app/" 
-# Synchronized with SENSOR_ID from log_uploader.py
-SENSOR_IDS = ["raspi_4b"]  
+FIREBASE_URL = "https://iot-sensors-pi-78113-default-rtdb.europe-west1.firebasedatabase.app/"
+SENSOR_IDS = ["raspi_4b"]
 
-# Configuration for how to display each metric (Title and Unit)
 METRIC_CONFIGS: Dict[str, Tuple[str, str]] = {
     "temperature_C": ("Temperature", "°C"),
     "humidity_pct": ("Humidity", "%"),
     "AQI": ("AQI", "Index"),
     "TVOC_ppb": ("TVOC", "ppb"),
-    "eCO2_ppm": ("eCO₂ (ENS160)", "ppm"), # Renamed title to clarify
+    "eCO2_ppm": ("eCO₂ (ENS160)", "ppm"),
     "co2_ppm": ("CO₂ (MH-Z19)", "ppm"),
     "pressure_hPa": ("Pressure", "hPa"),
     "altitude_m": ("Altitude", "m"),
 }
-
-# Fields that should be included in the multiselect for plotting
 DEFAULT_FIELDS: List[str] = list(METRIC_CONFIGS.keys())
 
 st.set_page_config(page_title="Srini's Airstation", layout="wide")
@@ -35,38 +31,26 @@ st.title("🌡️ Srini's Home Information")
 # ==============================
 @st.cache_data(ttl=30)
 def fetch_data(sensor_id):
-    """Fetches and processes all sensor data for a given sensor ID."""
     url = f"{FIREBASE_URL}/{sensor_id}.json"
-    
     try:
         res = requests.get(url, timeout=10)
         if res.status_code != 200:
             st.error(f"Failed to fetch data from Firebase (Status: {res.status_code})")
             return pd.DataFrame()
-        
         data = res.json() or {}
-        
         records = []
-        # Flatten the batches back into a single list of records
         for batch_key, batch_list in data.items():
             if isinstance(batch_list, list):
                 records.extend(batch_list)
             else:
                 records.append(batch_list)
 
-
         df = pd.DataFrame(records)
-        
         if not df.empty:
-            # FIX: Use format='mixed' and errors='coerce' for robust timestamp parsing.
             df["timestamp"] = pd.to_datetime(df["timestamp"], format='mixed', errors='coerce')
             df.dropna(subset=['timestamp'], inplace=True)
-            
             df = df.sort_values("timestamp")
-            
-            # --- FIXED: Now prioritizes co2_ppm (MH-Z19) over eCO2_ppm (ENS160) ---
             df['CO2_Primary'] = df.get('co2_ppm', pd.Series(dtype=float)).combine_first(df['eCO2_ppm'])
-            
         return df
 
     except requests.exceptions.RequestException as e:
@@ -74,11 +58,9 @@ def fetch_data(sensor_id):
         return pd.DataFrame()
 
 def normalize(series: pd.Series) -> pd.Series:
-    """Simple normalization for visual comparability."""
     series = pd.to_numeric(series, errors='coerce').dropna()
     if series.empty or series.nunique() <= 1:
         return series
-    # Normalize to 0-100 range
     return (series - series.min()) / (series.max() - series.min()) * 100
 
 # ==============================
@@ -93,34 +75,21 @@ for sensor in SENSOR_IDS:
         st.markdown("---")
         continue
 
-    # Latest values
     latest: Dict[str, Any] = df.iloc[-1].to_dict()
-    
-    # ----------------------------------------------------
-    # DYNAMIC METRIC DISPLAY (NEW)
-    # ----------------------------------------------------
-    
-    # Identify all numeric, relevant metrics from the latest reading
+
+    # Metric display
     display_metrics: List[Tuple[str, float]] = []
-    
     for key, (title, unit) in METRIC_CONFIGS.items():
         value = latest.get(key)
-        
-        # Check if value is not missing (NaN) and is numeric
         if pd.notna(value) and isinstance(value, (int, float)):
-            # Special formatting for certain values
             if key in ["eCO2_ppm", "co2_ppm", "AQI", "TVOC_ppb"]:
                 formatted_value = f"{value:.0f}"
             else:
                 formatted_value = f"{value:.2f}"
-
             display_metrics.append((title, formatted_value, unit))
 
     if display_metrics:
-        # Create columns based on the number of available metrics (up to 6 columns)
-        num_metrics = len(display_metrics)
-        cols = st.columns(min(num_metrics, 6))
-        
+        cols = st.columns(min(len(display_metrics), 6))
         for i, (title, value, unit) in enumerate(display_metrics):
             if i < len(cols):
                 cols[i].metric(title, f"{value} {unit}")
@@ -128,14 +97,37 @@ for sensor in SENSOR_IDS:
         st.info("No current numeric sensor readings available for display.")
 
     st.markdown("---")
-    
+
     # ----------------------------------------------------
-    # PLOTTING LOGIC
+    # TIME RANGE SELECTOR  ✅ NEW FEATURE
     # ----------------------------------------------------
-    
+    time_options = ["1 hr", "6 hrs", "12 hrs", "24 hrs", "Yesterday", "Entire period"]
+    selected_range = st.radio(
+        "Select time range:", time_options, horizontal=True, index=2, key=f"time_{sensor}"
+    )
+
+    now = df["timestamp"].max()
+    if selected_range == "1 hr":
+        start_time = now - timedelta(hours=1)
+        df = df[df["timestamp"] >= start_time]
+    elif selected_range == "6 hrs":
+        start_time = now - timedelta(hours=6)
+        df = df[df["timestamp"] >= start_time]
+    elif selected_range == "12 hrs":
+        start_time = now - timedelta(hours=12)
+        df = df[df["timestamp"] >= start_time]
+    elif selected_range == "24 hrs":
+        start_time = now - timedelta(hours=24)
+        df = df[df["timestamp"] >= start_time]
+    elif selected_range == "Yesterday":
+        yesterday = (now - timedelta(days=1)).date()
+        df = df[df["timestamp"].dt.date == yesterday]
+    # "Entire period" keeps df as-is
+
+    # ----------------------------------------------------
+    # PLOTTING
+    # ----------------------------------------------------
     available_fields = [f for f in DEFAULT_FIELDS if f in df.columns]
-    
-    # Add the primary CO2 metric if it was created
     if 'CO2_Primary' in df.columns and 'CO2_Primary' not in available_fields:
         available_fields.insert(0, 'CO2_Primary')
         
@@ -152,7 +144,7 @@ for sensor in SENSOR_IDS:
     fig = go.Figure()
     for field in selected_fields:
         if pd.api.types.is_numeric_dtype(df[field]) and df[field].nunique() > 1:
-            y_values = normalize(df[field]) 
+            y_values = normalize(df[field])
             name_suffix = " (Normalized)"
         else:
             y_values = df[field]
@@ -167,7 +159,7 @@ for sensor in SENSOR_IDS:
         ))
 
     fig.update_layout(
-        title=f"Combined Sensor Readings (Normalized for comparison)",
+        title=f"Combined Sensor Readings ({selected_range})",
         xaxis_title="Timestamp",
         yaxis_title="Normalized Scale (0–100)",
         hovermode="x unified",
