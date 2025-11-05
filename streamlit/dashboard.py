@@ -58,6 +58,7 @@ def fetch_data(sensor_id):
         return pd.DataFrame()
 
 def normalize(series: pd.Series) -> pd.Series:
+    """Normalize series between 0–100"""
     series = pd.to_numeric(series, errors='coerce').dropna()
     if series.empty or series.nunique() <= 1:
         return series
@@ -99,7 +100,7 @@ for sensor in SENSOR_IDS:
     st.markdown("---")
 
     # ----------------------------------------------------
-    # TIME RANGE SELECTOR  ✅ NEW FEATURE
+    # TIME RANGE SELECTOR
     # ----------------------------------------------------
     time_options = ["1 hr", "6 hrs", "12 hrs", "24 hrs", "Yesterday", "Entire period"]
     selected_range = st.radio(
@@ -125,7 +126,7 @@ for sensor in SENSOR_IDS:
     # "Entire period" keeps df as-is
 
     # ----------------------------------------------------
-    # PLOTTING
+    # PLOTTING (IMPROVED)
     # ----------------------------------------------------
     available_fields = [f for f in DEFAULT_FIELDS if f in df.columns]
     if 'CO2_Primary' in df.columns and 'CO2_Primary' not in available_fields:
@@ -142,30 +143,47 @@ for sensor in SENSOR_IDS:
     )
 
     fig = go.Figure()
+
+    # Normalize only within visible window
+    df_visible = df.copy()
+
     for field in selected_fields:
-        if pd.api.types.is_numeric_dtype(df[field]) and df[field].nunique() > 1:
-            y_values = normalize(df[field])
-            name_suffix = " (Normalized)"
+        if pd.api.types.is_numeric_dtype(df_visible[field]) and df_visible[field].nunique() > 1:
+            f_min = df_visible[field].min()
+            f_max = df_visible[field].max()
+            scaled = (df_visible[field] - f_min) / (f_max - f_min) * 100
+
+            fig.add_trace(go.Scatter(
+                x=df_visible["timestamp"],
+                y=scaled,
+                mode="lines",
+                name=field.replace('_', ' ').title(),
+                customdata=df_visible[field],
+                hovertemplate=(
+                    f"{field.replace('_', ' ').title()}: "
+                    "%{customdata:.2f}<br>"
+                    "%{x|%H:%M:%S}<extra></extra>"
+                ),
+            ))
         else:
-            y_values = df[field]
-            name_suffix = ""
+            fig.add_trace(go.Scatter(
+                x=df_visible["timestamp"],
+                y=df_visible[field],
+                mode="lines",
+                name=field.replace('_', ' ').title(),
+                hovertemplate=f"{field.replace('_', ' ').title()}: %{y:.2f}<br>%{{x|%H:%M:%S}}<extra></extra>"
+            ))
 
-        fig.add_trace(go.Scatter(
-            x=df["timestamp"],
-            y=y_values,
-            mode="lines",
-            name=field.replace('_', ' ').title() + name_suffix,
-            hovertemplate=f"{field.replace('_', ' ')}: %{{y:.2f}}<br>%{{x|%H:%M:%S}}<extra></extra>"
-        ))
-
+    # Layout for clarity
     fig.update_layout(
         title=f"Combined Sensor Readings ({selected_range})",
         xaxis_title="Timestamp",
-        yaxis_title="Normalized Scale (0–100)",
+        yaxis_title="",
         hovermode="x unified",
         legend_title="Variables",
         height=400,
-        template="plotly_white"
+        template="plotly_white",
+        yaxis=dict(showticklabels=False, showgrid=False, zeroline=False)
     )
 
     st.plotly_chart(fig, use_container_width=True)
