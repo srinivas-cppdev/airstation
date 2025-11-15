@@ -1,190 +1,110 @@
 import streamlit as st
-import requests
-import pandas as pd
-import plotly.graph_objects as go
-from typing import List, Dict, Any, Tuple
+import firebase_admin
+from firebase_admin import credentials, db
 from datetime import datetime, timedelta
+import pandas as pd
 
-# ==============================
-# CONFIG
-# ==============================
+# --------------------------------------------------------
+# Firebase Configuration (from your GitHub)
+# --------------------------------------------------------
 FIREBASE_URL = "https://iot-sensors-pi-78113-default-rtdb.europe-west1.firebasedatabase.app/"
-SENSOR_IDS = ["raspi_4b"]
 
-METRIC_CONFIGS: Dict[str, Tuple[str, str]] = {
-    "temperature_C": ("Temperature", "°C"),
-    "humidity_pct": ("Humidity", "%"),
-    "AQI": ("AQI", "Index"),
-    "TVOC_ppb": ("TVOC", "ppb"),
-    "eCO2_ppm": ("eCO₂ (ENS160)", "ppm"),
-    "co2_ppm": ("CO₂ (MH-Z19)", "ppm"),
-    "pressure_hPa": ("Pressure", "hPa"),
-    "altitude_m": ("Altitude", "m"),
-}
-DEFAULT_FIELDS: List[str] = list(METRIC_CONFIGS.keys())
+SERVICE_ACCOUNT_FILE = "serviceAccountKey.json"   # ensure this is in your folder
 
-st.set_page_config(page_title="Srini's Airstation", layout="wide")
-st.title("🌡️ Srini's Home Information")
 
-# ==============================
-# FUNCTIONS
-# ==============================
-@st.cache_data(ttl=30)
-def fetch_data(sensor_id):
-    url = f"{FIREBASE_URL}/{sensor_id}.json"
-    try:
-        res = requests.get(url, timeout=10)
-        if res.status_code != 200:
-            st.error(f"Failed to fetch data from Firebase (Status: {res.status_code})")
-            return pd.DataFrame()
-        data = res.json() or {}
-        records = []
-        for batch_key, batch_list in data.items():
-            if isinstance(batch_list, list):
-                records.extend(batch_list)
-            else:
-                records.append(batch_list)
+# --------------------------------------------------------
+# Firebase Initialization (Cached to avoid repeated sessions)
+# --------------------------------------------------------
+@st.cache_resource
+def init_firebase():
+    if not firebase_admin._apps:
+        cred = credentials.Certificate(SERVICE_ACCOUNT_FILE)
+        firebase_admin.initialize_app(cred, {"databaseURL": FIREBASE_URL})
+    return db.reference("/airstation")
 
-        df = pd.DataFrame(records)
-        if not df.empty:
-            df["timestamp"] = pd.to_datetime(df["timestamp"], format='mixed', errors='coerce')
-            df.dropna(subset=['timestamp'], inplace=True)
-            df = df.sort_values("timestamp")
-            df['CO2_Primary'] = df.get('co2_ppm', pd.Series(dtype=float)).combine_first(df['eCO2_ppm'])
-        return df
+airstation_ref = init_firebase()
 
-    except requests.exceptions.RequestException as e:
-        st.error(f"Network Error: Could not connect to Firebase. {e}")
+
+# --------------------------------------------------------
+# Fetch ONLY last 1 day of sensor readings (cached 60 sec)
+# --------------------------------------------------------
+@st.cache_data(ttl=60)
+def fetch_last_day():
+    """
+    Fetches only last 24 hours of data based on the timestamp field
+    stored inside each pushed record from capture.py.
+    """
+    cutoff_ts = int((datetime.utcnow() - timedelta(days=1)).timestamp())
+
+    # Firebase query: /airstation where child "timestamp" >= cutoff
+    snapshot = (
+        airstation_ref
+        .order_by_child("timestamp")
+        .start_at(cutoff_ts)
+        .get()
+    )
+
+    if not snapshot:
         return pd.DataFrame()
 
-def normalize(series: pd.Series) -> pd.Series:
-    """Normalize series between 0–100"""
-    series = pd.to_numeric(series, errors='coerce').dropna()
-    if series.empty or series.nunique() <= 1:
-        return series
-    return (series - series.min()) / (series.max() - series.min()) * 100
+    rows = []
+    for key, record in snapshot.items():
+        if "timestamp" not in record:
+            continue
+        r = record.copy()
+        # Convert UNIX timestamp (seconds) → Python datetime
+        r["timestamp"] = datetime.utcfromtimestamp(r["timestamp"])
+        rows.append(r)
 
-# ==============================
-# DASHBOARD
-# ==============================
-for sensor in SENSOR_IDS:
-    st.markdown(f"## 📟 Source: `{sensor}`")
-    df = fetch_data(sensor)
-    
-    if df.empty:
-        st.warning("No data found yet or connection failed.")
-        st.markdown("---")
-        continue
+    df = pd.DataFrame(rows)
 
-    latest: Dict[str, Any] = df.iloc[-1].to_dict()
+    if not df.empty:
+        df = df.sort_values("timestamp")
 
-    # Metric display
-    display_metrics: List[Tuple[str, float]] = []
-    for key, (title, unit) in METRIC_CONFIGS.items():
-        value = latest.get(key)
-        if pd.notna(value) and isinstance(value, (int, float)):
-            if key in ["eCO2_ppm", "co2_ppm", "AQI", "TVOC_ppb"]:
-                formatted_value = f"{value:.0f}"
-            else:
-                formatted_value = f"{value:.2f}"
-            display_metrics.append((title, formatted_value, unit))
+    return df
 
-    if display_metrics:
-        cols = st.columns(min(len(display_metrics), 6))
-        for i, (title, value, unit) in enumerate(display_metrics):
-            if i < len(cols):
-                cols[i].metric(title, f"{value} {unit}")
-    else:
-        st.info("No current numeric sensor readings available for display.")
 
-    st.markdown("---")
+# --------------------------------------------------------
+# Streamlit UI
+# --------------------------------------------------------
+st.set_page_config(page_title="AirStation Dashboard", layout="wide")
+st.title("AirStation Dashboard (Optimized for Low Firebase Usage)")
 
-    # ----------------------------------------------------
-    # TIME RANGE SELECTOR
-    # ----------------------------------------------------
-    time_options = ["1 hr", "6 hrs", "12 hrs", "24 hrs", "Yesterday", "Entire period"]
-    selected_range = st.radio(
-        "Select time range:", time_options, horizontal=True, index=2, key=f"time_{sensor}"
-    )
+st.markdown(
+    """
+    **This dashboard loads only the last 24 hours of sensor data.**  
+    To avoid high Firebase download costs, auto-refresh is disabled.  
+    Press the button below whenever you want updated readings.
+    """
+)
 
-    now = df["timestamp"].max()
-    if selected_range == "1 hr":
-        start_time = now - timedelta(hours=1)
-        df = df[df["timestamp"] >= start_time]
-    elif selected_range == "6 hrs":
-        start_time = now - timedelta(hours=6)
-        df = df[df["timestamp"] >= start_time]
-    elif selected_range == "12 hrs":
-        start_time = now - timedelta(hours=12)
-        df = df[df["timestamp"] >= start_time]
-    elif selected_range == "24 hrs":
-        start_time = now - timedelta(hours=24)
-        df = df[df["timestamp"] >= start_time]
-    elif selected_range == "Yesterday":
-        yesterday = (now - timedelta(days=1)).date()
-        df = df[df["timestamp"].dt.date == yesterday]
-    # "Entire period" keeps df as-is
+# Refresh button (clears cached data and reloads)
+if st.button("🔄 Refresh Latest Data"):
+    st.cache_data.clear()
+    df = fetch_last_day()
+else:
+    df = fetch_last_day()
 
-    # ----------------------------------------------------
-    # PLOTTING (IMPROVED)
-    # ----------------------------------------------------
-    available_fields = [f for f in DEFAULT_FIELDS if f in df.columns]
-    if 'CO2_Primary' in df.columns and 'CO2_Primary' not in available_fields:
-        available_fields.insert(0, 'CO2_Primary')
-        
-    selected_fields = st.multiselect(
-        f"Select variables to display for {sensor}:",
-        options=available_fields,
-        default=[
-            "temperature_C", 
-            "humidity_pct", 
-            "eCO2_ppm"
-        ] if "eCO2_ppm" in available_fields else ["CO2_Primary"]
-    )
+# --------------------------------------------------------
+# Display Data
+# --------------------------------------------------------
+if df.empty:
+    st.warning("No sensor data found in the last 24 hours.")
+else:
+    st.success(f"Loaded **{len(df)}** records from the last 1 day.")
 
-    fig = go.Figure()
+    st.dataframe(df, use_container_width=True)
 
-    # Normalize only within visible window
-    df_visible = df.copy()
+    # --------------------------------------------------------
+    # Charts
+    # --------------------------------------------------------
+    numeric_cols = [
+        col for col in df.columns
+        if col not in ("timestamp", "device_id")
+    ]
 
-    for field in selected_fields:
-        if pd.api.types.is_numeric_dtype(df_visible[field]) and df_visible[field].nunique() > 1:
-            f_min = df_visible[field].min()
-            f_max = df_visible[field].max()
-            scaled = (df_visible[field] - f_min) / (f_max - f_min) * 100
+    st.header("Charts")
 
-            fig.add_trace(go.Scatter(
-                x=df_visible["timestamp"],
-                y=scaled,
-                mode="lines",
-                name=field.replace('_', ' ').title(),
-                customdata=df_visible[field],
-                hovertemplate=(
-                    f"{field.replace('_', ' ').title()}: "
-                    "%{customdata:.2f}<br>"
-                    "%{x|%H:%M:%S}<extra></extra>"
-                ),
-            ))
-        else:
-            fig.add_trace(go.Scatter(
-                x=df_visible["timestamp"],
-                y=df_visible[field],
-                mode="lines",
-                name=field.replace('_', ' ').title(),
-                hovertemplate=f"{field.replace('_', ' ').title()}: %{y:.2f}<br>%{{x|%H:%M:%S}}<extra></extra>"
-            ))
-
-    # Layout for clarity
-    fig.update_layout(
-        title=f"Combined Sensor Readings ({selected_range})",
-        xaxis_title="Timestamp",
-        yaxis_title="",
-        hovermode="x unified",
-        legend_title="Variables",
-        height=400,
-        template="plotly_white",
-        yaxis=dict(showticklabels=False, showgrid=False, zeroline=False)
-    )
-
-    st.plotly_chart(fig, use_container_width=True)
-    st.markdown("---")
+    for col in numeric_cols:
+        st.subheader(col)
+        st.line_chart(df.set_index("timestamp")[col], height=250)
