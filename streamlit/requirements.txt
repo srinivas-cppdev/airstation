@@ -36,5 +36,5 @@ typing_extensions==4.15.0
 tzdata==2025.2
 urllib3
 watchdog==6.0.0
-pyrebase4==4.8.0
+pyrebase4
 requests_toolbelt
