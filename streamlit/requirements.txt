@@ -34,8 +34,7 @@ toml==0.10.2
 tornado==6.5.2
 typing_extensions==4.15.0
 tzdata==2025.2
-urllib3==2.5.0
-watchdog==6.0.0
-pyrebase4==4.0.1
-requests_toolbelt
 urllib3
+watchdog==6.0.0
+pyrebase4==4.8.0
+requests_toolbelt
