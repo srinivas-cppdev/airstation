@@ -1,5 +1,5 @@
 import streamlit as st
-import pyrebase
+import pyrebase4 as pyrebase
 from datetime import datetime, timedelta
 import pandas as pd
 
